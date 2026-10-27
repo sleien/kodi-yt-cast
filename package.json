@@ -1,0 +1,22 @@
+{
+  "name": "kodi-yt-cast",
+  "version": "0.1.0",
+  "description": "YouTube \"Watch on TV\" for Kodi: a cast receiver that plays through Kodi's YouTube add-on",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "yt-cast-receiver": "2.1.0"
+  },
+  "devDependencies": {
+    "ws": "8.22.0"
+  }
+}

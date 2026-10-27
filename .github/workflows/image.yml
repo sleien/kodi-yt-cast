@@ -1,0 +1,90 @@
+name: image
+
+# Tests, builds, and publishes the image to GHCR.
+#
+#   push to main  -> ghcr.io/sleien/kodi-yt-cast:main and :sha-<short>
+#   tag v1.2.3    -> ghcr.io/sleien/kodi-yt-cast:1.2.3 and :1.2
+#
+# The homelab pins the full version by digest; Renovate proposes bumps.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+      - run: npm test
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build for the check
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: kodi-yt-cast:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The receiver starts and answers DIAL with its name, without a Kodi.
+      - name: Smoke test
+        run: |
+          docker run -d --name smoke --network host -e DIAL_PORT=18098 -e TV_NAME=smoke-tv \
+            -e KODI_TCP_PORT=1 --tmpfs /data:uid=1000,gid=1000 kodi-yt-cast:ci
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:18098/ytcr/ssdp/device-desc.xml | grep -q '<friendlyName>smoke-tv' && ok=1 && break
+            sleep 1
+          done
+          docker logs smoke
+          docker rm -f smoke
+          [ "${ok:-}" = 1 ]
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kodi-yt-cast
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha,prefix=sha-
+
+      - name: Publish
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The homelab host is x86-64.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
