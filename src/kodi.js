@@ -5,6 +5,12 @@
 // (method, params). The connection is kept up: it reconnects with backoff,
 // and requests made while it is down reject at once rather than queue, since
 // a cast command that arrives late is worse than one that fails.
+//
+// A connection the socket itself never reports closed is given up too: a
+// handshake that has not completed within timeoutMs, and an open connection
+// that leaves a JSONRPC.Ping every heartbeatMs unanswered. While Kodi was
+// away for a game, docker-proxy once took the TCP connection and never
+// answered the handshake; the socket waited in CLOSE_WAIT for two days.
 
 import { EventEmitter } from 'node:events';
 
@@ -18,16 +24,18 @@ export class KodiClient extends EventEmitter {
   #minRetryMs;
   #maxRetryMs;
   #timeoutMs;
+  #heartbeatMs;
   #WebSocket;
 
   constructor(url, { minRetryMs = 1000, maxRetryMs = 30000, timeoutMs = 10000,
-    WebSocketImpl = globalThis.WebSocket } = {}) {
+    heartbeatMs = 30000, WebSocketImpl = globalThis.WebSocket } = {}) {
     super();
     this.#url = url;
     this.#minRetryMs = minRetryMs;
     this.#maxRetryMs = maxRetryMs;
     this.#retryMs = minRetryMs;
     this.#timeoutMs = timeoutMs;
+    this.#heartbeatMs = heartbeatMs;
     this.#WebSocket = WebSocketImpl;
   }
 
@@ -38,13 +46,14 @@ export class KodiClient extends EventEmitter {
   connect() {
     if (this.#closed) return;
     const socket = new this.#WebSocket(this.#url);
-    socket.addEventListener('open', () => {
-      this.#socket = socket;
-      this.#retryMs = this.#minRetryMs;
-      this.emit('connect');
-    });
-    socket.addEventListener('message', (event) => this.#onMessage(event.data));
-    socket.addEventListener('close', () => {
+    let heartbeat = null;
+    let ended = false;
+    // Runs once per socket, whether the socket closed or was given up on.
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      clearTimeout(handshake);
+      clearInterval(heartbeat);
       if (this.#socket === socket) this.#socket = null;
       for (const { reject, timer } of this.#pending.values()) {
         clearTimeout(timer);
@@ -56,7 +65,33 @@ export class KodiClient extends EventEmitter {
         setTimeout(() => this.connect(), this.#retryMs);
         this.#retryMs = Math.min(this.#retryMs * 2, this.#maxRetryMs);
       }
+    };
+    const giveUp = () => {
+      end();
+      try {
+        socket.close();
+      } catch {
+        // Closing a socket that never opened may throw; it is abandoned anyway.
+      }
+    };
+    const handshake = setTimeout(giveUp, this.#timeoutMs);
+    socket.addEventListener('open', () => {
+      if (ended) return;
+      clearTimeout(handshake);
+      this.#socket = socket;
+      this.#retryMs = this.#minRetryMs;
+      heartbeat = setInterval(() => {
+        // A failed call means no answer within timeoutMs, or already closed.
+        this.call('JSONRPC.Ping').catch(() => {
+          if (this.#socket === socket) giveUp();
+        });
+      }, this.#heartbeatMs);
+      this.emit('connect');
     });
+    socket.addEventListener('message', (event) => {
+      if (!ended) this.#onMessage(event.data);
+    });
+    socket.addEventListener('close', end);
     // An error is always followed by close, which does the handling.
     socket.addEventListener('error', () => {});
   }
