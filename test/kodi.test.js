@@ -63,9 +63,10 @@ test('calls fail at once while Kodi is away, and the client reconnects', async (
   server.close();
 });
 
-// What docker-proxy did on 2026-11-08 while Kodi was away for a game: took
-// the TCP connection and never answered the WebSocket handshake. The client
-// sat in CLOSE_WAIT for two days and casting failed with "Kodi not connected".
+// On 2026-11-08 a reconnect after Kodi left for a game never completed nor
+// failed, and casting failed with "Kodi not connected" for two days. A server
+// that takes the connection and never answers the handshake hangs it the same
+// way.
 test('a handshake that never completes is given up, and retried', async () => {
   let attempts = 0;
   const server = net.createServer((socket) => {

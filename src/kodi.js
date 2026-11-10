@@ -8,9 +8,9 @@
 //
 // A connection the socket itself never reports closed is given up too: a
 // handshake that has not completed within timeoutMs, and an open connection
-// that leaves a JSONRPC.Ping every heartbeatMs unanswered. While Kodi was
-// away for a game, docker-proxy once took the TCP connection and never
-// answered the handshake; the socket waited in CLOSE_WAIT for two days.
+// that leaves a JSONRPC.Ping every heartbeatMs unanswered. In November 2026
+// a reconnect after Kodi left for a game never completed nor failed, and
+// every cast was refused as "Kodi not connected" for two days.
 
 import { EventEmitter } from 'node:events';
 
